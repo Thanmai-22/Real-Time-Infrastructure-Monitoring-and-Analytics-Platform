@@ -1,0 +1,127 @@
+networks:
+  infra-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  kafka_data:
+
+services:
+  # ── Zookeeper ──────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: zookeeper
+    networks: [infra-net]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "bash", "-c", "cub zk-ready localhost:2181 20 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 15s
+      retries: 10
+      start_period: 20s
+
+  # ── Kafka ──────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kafka
+    networks: [infra-net]
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 6
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:29092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── TimescaleDB (PostgreSQL + time-series extension) ───────────
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: timescaledb
+    networks: [infra-net]
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: monitor
+      POSTGRES_PASSWORD: monitor_secret
+      POSTGRES_DB: infra_monitor
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitor -d infra_monitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Event Generator ────────────────────────────────────────────
+  event-generator:
+    build:
+      context: .
+      dockerfile: src/infra_monitor/generator/Dockerfile
+    container_name: event-generator
+    networks: [infra-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC_METRICS: infrastructure.metrics
+      EMIT_INTERVAL_SECONDS: "1"
+    restart: unless-stopped
+
+  # ── Stream Processor ───────────────────────────────────────────
+  stream-processor:
+    build:
+      context: .
+      dockerfile: src/infra_monitor/processor/Dockerfile
+    container_name: stream-processor
+    networks: [infra-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC_METRICS: infrastructure.metrics
+      KAFKA_TOPIC_ANOMALIES: infrastructure.anomalies
+      KAFKA_CONSUMER_GROUP: infra-processor
+      DATABASE_URL: postgresql+psycopg2://monitor:monitor_secret@timescaledb:5432/infra_monitor
+    restart: unless-stopped
+
+  # ── API ────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: src/infra_monitor/api/Dockerfile
+    container_name: infra-api
+    networks: [infra-net]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC_ANOMALIES: infrastructure.anomalies
+      DATABASE_URL: postgresql+psycopg2://monitor:monitor_secret@timescaledb:5432/infra_monitor
+    restart: unless-stopped

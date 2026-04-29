@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Infra Monitor — Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#060a10;--panel:#0b1220;--border:#162035;
+  --accent:#3b82f6;--cyan:#06b6d4;--green:#22c55e;
+  --yellow:#eab308;--red:#ef4444;--purple:#a855f7;--orange:#f97316;
+  --text:#e2e8f0;--dim:#64748b;
+  --mono:'JetBrains Mono',monospace;--sans:'Space Grotesk',sans-serif;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--sans);overflow:hidden}
+.canvas{width:100%;height:100vh;position:relative;overflow:hidden}
+.grid-bg{
+  position:absolute;inset:0;
+  background-image:linear-gradient(rgba(59,130,246,0.04) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(59,130,246,0.04) 1px,transparent 1px);
+  background-size:40px 40px;
+}
+.glow{position:absolute;border-radius:50%;filter:blur(90px);opacity:0.10;pointer-events:none}
+.glow-1{width:700px;height:400px;background:var(--accent);top:-120px;left:150px}
+.glow-2{width:400px;height:400px;background:var(--cyan);top:55%;left:65%;transform:translate(-50%,-50%)}
+.glow-3{width:300px;height:300px;background:var(--purple);bottom:0;right:80px}
+
+.header{position:absolute;top:26px;left:40px}
+.h-title{font-size:22px;font-weight:700;letter-spacing:-0.03em}
+.h-sub{font-size:12px;color:var(--dim);margin-top:4px;font-family:var(--mono)}
+
+.pills{position:absolute;top:30px;right:40px;display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.pill{font-size:10px;font-family:var(--mono);font-weight:600;padding:4px 10px;border-radius:20px;border:1px solid}
+.p-kafka {background:rgba(234,179,8,0.1);border-color:rgba(234,179,8,0.3);color:var(--yellow)}
+.p-tsdb  {background:rgba(6,182,212,0.1);border-color:rgba(6,182,212,0.3);color:var(--cyan)}
+.p-fast  {background:rgba(34,197,94,0.1);border-color:rgba(34,197,94,0.3);color:var(--green)}
+.p-dock  {background:rgba(59,130,246,0.1);border-color:rgba(59,130,246,0.3);color:var(--accent)}
+.p-py   {background:rgba(168,85,247,0.1);border-color:rgba(168,85,247,0.3);color:var(--purple)}
+.p-ws   {background:rgba(249,115,22,0.1);border-color:rgba(249,115,22,0.3);color:var(--orange)}
+
+/* arrows layer */
+svg.arrows{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:1}
+
+/* components */
+.comp{
+  position:absolute;z-index:5;
+  border-radius:14px;border:1px solid;
+  padding:14px 16px;
+  backdrop-filter:blur(4px);
+  cursor:default;
+  transition:transform 0.2s,box-shadow 0.2s;
+}
+.comp:hover{transform:translateY(-3px);box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+.c-icon{font-size:24px;margin-bottom:7px}
+.c-title{font-size:13px;font-weight:700;margin-bottom:2px}
+.c-sub{font-size:10px;opacity:0.55;font-family:var(--mono)}
+.c-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:9px}
+.c-tag{font-size:9px;font-family:var(--mono);padding:2px 6px;border-radius:3px;background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.45)}
+
+.gen  {background:rgba(234,179,8,0.07);border-color:rgba(234,179,8,0.28);width:154px}
+.kafka{background:rgba(234,179,8,0.09);border-color:rgba(234,179,8,0.38);width:162px}
+.proc {background:rgba(59,130,246,0.09);border-color:rgba(59,130,246,0.32);width:174px}
+.anom {background:rgba(239,68,68,0.09);border-color:rgba(239,68,68,0.32);width:174px}
+.db   {background:rgba(6,182,212,0.09);border-color:rgba(6,182,212,0.32);width:174px}
+.api  {background:rgba(34,197,94,0.09);border-color:rgba(34,197,94,0.32);width:174px}
+.dash {background:rgba(168,85,247,0.09);border-color:rgba(168,85,247,0.32);width:162px}
+
+/* data packets */
+.pkt{
+  position:absolute;z-index:10;
+  width:9px;height:9px;border-radius:50%;
+  pointer-events:none;
+  transition:opacity 0.3s;
+}
+
+/* features bottom bar */
+.feats{
+  position:absolute;bottom:22px;left:50%;transform:translateX(-50%);
+  display:flex;gap:10px;
+}
+.feat{
+  background:var(--panel);border:1px solid var(--border);
+  border-radius:10px;padding:11px 15px;min-width:130px;text-align:center;
+}
+.feat-i{font-size:18px;margin-bottom:5px}
+.feat-t{font-size:11px;font-weight:600;margin-bottom:2px}
+.feat-d{font-size:9px;color:var(--dim);font-family:var(--mono)}
+
+/* flow labels */
+.lbl{
+  position:absolute;z-index:6;
+  font-size:9px;font-family:var(--mono);
+  color:var(--dim);background:var(--bg);
+  padding:2px 6px;border-radius:4px;border:1px solid var(--border);
+}
+</style>
+</head>
+<body>
+<div class="canvas" id="canvas">
+  <div class="grid-bg"></div>
+  <div class="glow glow-1"></div>
+  <div class="glow glow-2"></div>
+  <div class="glow glow-3"></div>
+
+  <div class="header">
+    <div class="h-title">Real-Time Infrastructure Monitor</div>
+    <div class="h-sub">Architecture · Data Flow · Tech Stack</div>
+  </div>
+
+  <div class="pills">
+    <span class="pill p-py">Python 3.11</span>
+    <span class="pill p-kafka">Apache Kafka</span>
+    <span class="pill p-tsdb">TimescaleDB</span>
+    <span class="pill p-fast">FastAPI</span>
+    <span class="pill p-ws">WebSocket</span>
+    <span class="pill p-dock">Docker Compose</span>
+  </div>
+
+  <!-- SVG arrows -->
+  <svg class="arrows" id="svg" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="a"       markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3z" fill="#2d4060"/></marker>
+      <marker id="a-blue"  markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3z" fill="#3b82f6"/></marker>
+      <marker id="a-red"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3z" fill="#ef4444"/></marker>
+      <marker id="a-cyan"  markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3z" fill="#06b6d4"/></marker>
+      <marker id="a-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3z" fill="#22c55e"/></marker>
+      <marker id="a-pur"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3z" fill="#a855f7"/></marker>
+    </defs>
+    <!-- lines filled by JS -->
+    <line id="l-gen-kafka"   stroke="#eab308" stroke-width="1.5" stroke-dasharray="7,4" marker-end="url(#a)"/>
+    <line id="l-kafka-proc"  stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="7,4" marker-end="url(#a-blue)"/>
+    <line id="l-kafka-anom"  stroke="#ef4444" stroke-width="1.5" stroke-dasharray="7,4" marker-end="url(#a-red)"/>
+    <line id="l-proc-db"     stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="7,4" marker-end="url(#a-cyan)"/>
+    <line id="l-anom-db"     stroke="#ef4444" stroke-width="1"   stroke-dasharray="4,4" marker-end="url(#a-red)"/>
+    <line id="l-db-api"      stroke="#22c55e" stroke-width="1.5" stroke-dasharray="7,4" marker-end="url(#a-green)"/>
+    <line id="l-anom-api"    stroke="#ef4444" stroke-width="1"   stroke-dasharray="4,4" marker-end="url(#a-red)"/>
+    <line id="l-api-dash"    stroke="#a855f7" stroke-width="2"   stroke-dasharray="7,4" marker-end="url(#a-pur)"/>
+  </svg>
+
+  <!-- Components — positioned by JS -->
+  <div class="comp gen"   id="c-gen">
+    <div class="c-icon">🏭</div>
+    <div class="c-title">Event Generator</div>
+    <div class="c-sub">12 services · 5 nodes</div>
+    <div class="c-tags">
+      <span class="c-tag">random walk</span>
+      <span class="c-tag">spike inject</span>
+      <span class="c-tag">1/sec</span>
+    </div>
+  </div>
+
+  <div class="comp kafka" id="c-kafka">
+    <div class="c-icon">⚡</div>
+    <div class="c-title">Apache Kafka</div>
+    <div class="c-sub">2 topics</div>
+    <div class="c-tags">
+      <span class="c-tag">metrics</span>
+      <span class="c-tag">anomalies</span>
+      <span class="c-tag">acks=all</span>
+    </div>
+  </div>
+
+  <div class="comp proc" id="c-proc">
+    <div class="c-icon">🔄</div>
+    <div class="c-title">Stream Processor</div>
+    <div class="c-sub">consumer group</div>
+    <div class="c-tags">
+      <span class="c-tag">rolling avg</span>
+      <span class="c-tag">p95 latency</span>
+      <span class="c-tag">batch insert 50</span>
+    </div>
+  </div>
+
+  <div class="comp anom" id="c-anom">
+    <div class="c-icon">🔬</div>
+    <div class="c-title">Anomaly Detector</div>
+    <div class="c-sub">3 strategies</div>
+    <div class="c-tags">
+      <span class="c-tag">z-score σ≥3</span>
+      <span class="c-tag">threshold</span>
+      <span class="c-tag">rate-of-change</span>
+    </div>
+  </div>
+
+  <div class="comp db" id="c-db">
+    <div class="c-icon">🗄️</div>
+    <div class="c-title">TimescaleDB</div>
+    <div class="c-sub">PostgreSQL + extensions</div>
+    <div class="c-tags">
+      <span class="c-tag">hypertable</span>
+      <span class="c-tag">cont. aggregates</span>
+      <span class="c-tag">1-min rollups</span>
+    </div>
+  </div>
+
+  <div class="comp api" id="c-api">
+    <div class="c-icon">⚙️</div>
+    <div class="c-title">FastAPI</div>
+    <div class="c-sub">REST + WebSocket</div>
+    <div class="c-tags">
+      <span class="c-tag">GET /metrics</span>
+      <span class="c-tag">GET /anomalies</span>
+      <span class="c-tag">WS /ws</span>
+    </div>
+  </div>
+
+  <div class="comp dash" id="c-dash">
+    <div class="c-icon">📊</div>
+    <div class="c-title">Dashboard</div>
+    <div class="c-sub">HTML · Chart.js · WS</div>
+    <div class="c-tags">
+      <span class="c-tag">live charts</span>
+      <span class="c-tag">alert feed</span>
+      <span class="c-tag">health table</span>
+    </div>
+  </div>
+
+  <!-- Feature summary bar -->
+  <div class="feats">
+    <div class="feat">
+      <div class="feat-i">🌊</div>
+      <div class="feat-t">Streaming Pipeline</div>
+      <div class="feat-d">12 svc × 1 evt/sec<br>Kafka ingestion</div>
+    </div>
+    <div class="feat">
+      <div class="feat-i">📈</div>
+      <div class="feat-t">Metric Aggregation</div>
+      <div class="feat-d">Rolling avg, p95<br>1-min hypertable</div>
+    </div>
+    <div class="feat">
+      <div class="feat-i">🎯</div>
+      <div class="feat-t">Anomaly Detection</div>
+      <div class="feat-d">Z-score + threshold<br>+ rate-of-change</div>
+    </div>
+    <div class="feat">
+      <div class="feat-i">⚡</div>
+      <div class="feat-t">Real-Time API</div>
+      <div class="feat-d">WebSocket push<br>~2s latency</div>
+    </div>
+    <div class="feat">
+      <div class="feat-i">🐳</div>
+      <div class="feat-t">Docker Compose</div>
+      <div class="feat-d">One-command boot<br>6 services</div>
+    </div>
+  </div>
+
+  <!-- Flow labels -->
+  <div class="lbl" id="lbl1">JSON events</div>
+  <div class="lbl" id="lbl2">consume</div>
+  <div class="lbl" id="lbl3">bulk write</div>
+  <div class="lbl" id="lbl4">REST query</div>
+  <div class="lbl" id="lbl5">WS push</div>
+</div>
+
+<script>
+const W = () => window.innerWidth;
+const H = () => window.innerHeight;
+
+// Relative positions [left%, top%]
+const POS = {
+  gen:   [0.03, 0.30],
+  kafka: [0.20, 0.30],
+  proc:  [0.39, 0.16],
+  anom:  [0.39, 0.54],
+  db:    [0.60, 0.16],
+  api:   [0.60, 0.54],
+  dash:  [0.79, 0.34],
+};
+
+function place() {
+  Object.entries(POS).forEach(([k,[px,py]])=>{
+    const el = document.getElementById('c-'+k);
+    el.style.left = (W()*px)+'px';
+    el.style.top  = (H()*py)+'px';
+  });
+  requestAnimationFrame(drawLines);
+}
+
+function rect(id) { return document.getElementById('c-'+id).getBoundingClientRect(); }
+function rgt(id) { const r=rect(id); return [r.right, r.top+r.height/2]; }
+function lft(id) { const r=rect(id); return [r.left,  r.top+r.height/2]; }
+function bot(id) { const r=rect(id); return [r.left+r.width/2, r.bottom]; }
+function tp (id) { const r=rect(id); return [r.left+r.width/2, r.top]; }
+
+function setLine(id, [x1,y1],[x2,y2]) {
+  const el=document.getElementById(id);
+  el.setAttribute('x1',x1); el.setAttribute('y1',y1);
+  el.setAttribute('x2',x2-9); el.setAttribute('y2',y2);
+}
+
+function drawLines() {
+  setLine('l-gen-kafka',  rgt('gen'),  lft('kafka'));
+  setLine('l-kafka-proc', rgt('kafka'),lft('proc'));
+  setLine('l-kafka-anom', rgt('kafka'),lft('anom'));
+  setLine('l-proc-db',    rgt('proc'), lft('db'));
+  setLine('l-anom-db',    rgt('anom'), lft('db'));
+  setLine('l-db-api',     bot('db'),   tp('api'));
+  setLine('l-anom-api',   bot('anom'), tp('api'));
+  setLine('l-api-dash',   rgt('api'),  lft('dash'));
+
+  // Position labels
+  const posLabel = (lblId, [x1,y1],[x2,y2], dy=0) => {
+    const el = document.getElementById(lblId);
+    el.style.left = ((x1+x2)/2 - 30)+'px';
+    el.style.top  = ((y1+y2)/2 - 9 + dy)+'px';
+  };
+  posLabel('lbl1', rgt('gen'),   lft('kafka'), -16);
+  posLabel('lbl2', rgt('kafka'), lft('proc'),  -16);
+  posLabel('lbl3', rgt('proc'),  lft('db'),    -16);
+  posLabel('lbl4', rgt('db'),    lft('dash'),  -16);
+  posLabel('lbl5', rgt('api'),   lft('dash'),   +8);
+}
+
+place();
+window.addEventListener('resize', place);
+
+// Animated data packets
+const PACKETS = [
+  { from:'gen',  color:'#eab308', interval:700  },
+  { from:'kafka',color:'#3b82f6', interval:800  },
+  { from:'proc', color:'#06b6d4', interval:1000 },
+  { from:'anom', color:'#ef4444', interval:1200 },
+  { from:'api',  color:'#a855f7', interval:1500 },
+];
+
+PACKETS.forEach(({from, color, interval}) => {
+  setInterval(() => {
+    const el = document.getElementById('c-'+from);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const pkt = document.createElement('div');
+    pkt.className = 'pkt';
+    pkt.style.cssText = `
+      background:${color};
+      box-shadow:0 0 8px ${color};
+      left:${r.right-4}px;
+      top:${r.top+r.height/2-4}px;
+    `;
+    document.getElementById('canvas').appendChild(pkt);
+
+    // Find target element to animate toward
+    const targets = { gen:'kafka', kafka:'proc', proc:'db', anom:'db', api:'dash' };
+    const toId = targets[from];
+    if (toId) {
+      const t = document.getElementById('c-'+toId).getBoundingClientRect();
+      const dx = t.left - r.right;
+      const dy = t.top + t.height/2 - (r.top + r.height/2);
+      pkt.style.transition = 'transform 0.9s linear, opacity 0.9s';
+      requestAnimationFrame(()=>{
+        requestAnimationFrame(()=>{
+          pkt.style.transform = `translate(${dx}px,${dy}px)`;
+          pkt.style.opacity = '0';
+        });
+      });
+    }
+    setTimeout(()=>pkt.remove(), 1000);
+  }, interval);
+});
+</script>
+</body>
+</html>
